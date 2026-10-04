@@ -46,6 +46,17 @@ Item {
 
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omagent"
   readonly property string statePath: root.stateDir + "/last.json"
+  readonly property string configPath: Quickshell.env("HOME") + "/.config/omagent/config.json"
+
+  // Where Enter sends a request: "pill" streams it into the card, "terminal"
+  // opens the agent's own window. Shift+Enter always does the other one. A
+  // conversation already in the card keeps Enter there, whatever the setting.
+  property string submitTarget: "pill"
+  readonly property bool enterOpensTerminal: root.submitTarget === "terminal"
+    && !root.hasSession && !root.busy
+  property var pendingTerminal: null
+  property var launchLines: []
+  property string launchRequest: ""
 
   readonly property bool busy: runner.running || root.runState === "running" || root.runState === "detached"
   readonly property bool stoppable: root.busy
@@ -255,9 +266,23 @@ Item {
     list.contentY = Math.max(0, list.contentHeight - list.height)
   }
 
-  function submit() {
+  function applyConfig(raw) {
+    var data = null
+    try {
+      data = JSON.parse(raw || "{}")
+    } catch (error) {
+      data = null
+    }
+    root.submitTarget = data && data.submitTarget === "terminal" ? "terminal" : "pill"
+  }
+
+  function submit(alternate) {
     var request = prompt.text.trim()
     if (!request) return
+    if (root.enterOpensTerminal !== (alternate === true)) {
+      root.submitToTerminal(request)
+      return
+    }
     if (root.busy) {
       root.pushRow("status", "Still working. Ctrl+C stops it")
       return
@@ -283,6 +308,60 @@ Item {
     runner.command = argv
     runner.running = true
     prompt.text = ""
+  }
+
+  // A pill session continues in the terminal, so a run still streaming into
+  // the card is stopped first, the same as Ctrl+E.
+  function submitToTerminal(request) {
+    if (launcher.running || root.pendingTerminal) return
+    var argv = [root.routerPath, "--terminal"]
+    if (root.autoMode) argv.push("--auto")
+    if (root.hasSession) argv = argv.concat(["--agent", root.agentName, "--session", root.sessionId])
+    argv.push("--", request)
+    root.launchRequest = request
+    prompt.text = ""
+    root.dismiss()
+    if (runner.running) {
+      root.pendingTerminal = argv
+      root.pendingExpand = false
+      root.stopRun()
+      return
+    }
+    root.stopRun()
+    root.launch(argv)
+  }
+
+  function launch(argv) {
+    root.launchLines = []
+    launcher.command = argv
+    launcher.running = true
+  }
+
+  // Once the terminal owns the conversation the card has nothing left to
+  // follow, so the next SUPER+A starts clean. The router only fails before
+  // anything opens (no default agent, or it is not installed), so then the
+  // pill comes back with the request and the card's usual way out.
+  function finishLaunch(code) {
+    var failed = code !== 0
+    for (var i = 0; i < root.launchLines.length && !failed; i++) {
+      try {
+        if (JSON.parse(root.launchLines[i]).kind === "error") failed = true
+      } catch (error) {
+        failed = true
+      }
+    }
+    if (!failed) {
+      root.newSession()
+      return
+    }
+    var request = root.launchRequest
+    if (root.shell && typeof root.shell.summon === "function")
+      root.shell.summon((root.manifest && root.manifest.id) || "io.github.ellion369.omagent", "{}")
+    else root.open("{}")
+    for (var j = 0; j < root.launchLines.length; j++) root.handleLine(root.launchLines[j])
+    if (code !== 0 && root.launchLines.length === 0)
+      root.pushRow("error", "Could not open the terminal (code " + code + ")")
+    Qt.callLater(function() { prompt.text = request })
   }
 
   function handleLine(line) {
@@ -351,6 +430,13 @@ Item {
     var wasStopped = root.expectedStop || root.runState === "stopped"
     root.expectedStop = false
 
+    if (root.pendingTerminal) {
+      var argv = root.pendingTerminal
+      root.pendingTerminal = null
+      root.save()
+      root.launch(argv)
+      return
+    }
     if (root.pendingExpand) {
       root.pendingExpand = false
       root.launchResume()
@@ -499,6 +585,29 @@ Item {
     printErrors: false
     onLoaded: root.restore(text())
     onLoadFailed: root.restored = true
+  }
+
+  FileView {
+    path: root.configPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.applyConfig(text())
+    onLoadFailed: root.applyConfig("")
+  }
+
+  Process {
+    id: launcher
+    stdout: SplitParser {
+      onRead: function(line) { root.launchLines = root.launchLines.concat([String(line)]) }
+    }
+    stderr: SplitParser {
+      onRead: function(line) {
+        if (String(line).trim() !== "")
+          root.launchLines = root.launchLines.concat([JSON.stringify({ "kind": "error", "text": String(line) })])
+      }
+    }
+    onExited: function(exitCode) { root.finishLaunch(exitCode) }
   }
 
   Process {
@@ -762,12 +871,12 @@ Item {
             }
 
             Keys.onReturnPressed: function(event) {
-              root.submit()
+              root.submit((event.modifiers & Qt.ShiftModifier) !== 0)
               event.accepted = true
             }
 
             Keys.onEnterPressed: function(event) {
-              root.submit()
+              root.submit((event.modifiers & Qt.ShiftModifier) !== 0)
               event.accepted = true
             }
           }

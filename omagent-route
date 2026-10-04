@@ -198,6 +198,34 @@ def gemini_resume(session: str) -> list[str]:
     return ["gemini", "--resume", "latest"] if session else []
 
 
+def opencode_terminal(prompt: str, session: str, auto: bool) -> list[str]:
+    argv = ["opencode"] + (["--auto"] if auto else [])
+    if session:
+        argv += ["-s", session]
+    return argv + ["--prompt", prompt]
+
+
+def claude_terminal(prompt: str, session: str, auto: bool) -> list[str]:
+    argv = ["claude"] + (["--permission-mode", "auto"] if auto else [])
+    if session:
+        argv += ["--resume", session]
+    return argv + ["--", prompt]
+
+
+def codex_terminal(prompt: str, session: str, auto: bool) -> list[str]:
+    argv = ["codex"] + (["--approve-for-me"] if auto else [])
+    if session:
+        argv += ["resume", session]
+    return argv + ["--", prompt]
+
+
+def gemini_terminal(prompt: str, session: str, auto: bool) -> list[str]:
+    argv = ["gemini"] + (["--yolo"] if auto else [])
+    if session:
+        argv += ["--resume", "latest"]
+    return argv + ["--prompt-interactive", prompt]
+
+
 PERMISSION_REFUSED = re.compile(
     r"permission requested:\s*(\S+)\s*\(([^)]*)\);\s*auto-rejecting")
 
@@ -380,28 +408,44 @@ ADAPTERS = {
     "opencode": {
         "run": lambda prompt, session, pinned, auto: opencode_argv(prompt, session, auto),
         "resume": opencode_resume,
+        "terminal": opencode_terminal,
         "event": opencode_event,
         "pins_session": False,
     },
     "claude": {
         "run": claude_argv,
         "resume": claude_resume,
+        "terminal": claude_terminal,
         "event": claude_event,
         "pins_session": True,
     },
     "codex": {
         "run": lambda prompt, session, pinned, auto: codex_argv(prompt, session, auto),
         "resume": codex_resume,
+        "terminal": codex_terminal,
         "event": codex_event,
         "pins_session": False,
     },
     "gemini": {
         "run": gemini_argv,
         "resume": gemini_resume,
+        "terminal": gemini_terminal,
         "event": gemini_event,
         "pins_session": True,
     },
 }
+
+
+def open_terminal(request: str, agent: str, session: str, auto: bool) -> int:
+    # The interactive session can show permission prompts itself, so it gets
+    # the pill's mode rather than omarchy-agent's always-on approval flags. The
+    # request goes in as typed, without PREAMBLE: a full terminal does not need
+    # the short, plain-text answers the card does.
+    argv = ADAPTERS[agent]["terminal"](request, session, auto)
+    detached(["omarchy-launch-tui", "--app-id=org.omarchy.agent", *argv], cwd=work_dir())
+    emit("status", text=f"Opened {agent_label(agent)}")
+    emit("done", ok=True, code=0, stopped=False)
+    return 0
 
 
 def run_agent(request: str, agent: str, session: str, auto: bool) -> int:
@@ -520,7 +564,8 @@ def run_agent(request: str, agent: str, session: str, auto: bool) -> int:
     return 0 if code == 0 else 1
 
 
-def route_agent(request: str, agent: str, session: str, auto: bool) -> int:
+def route_agent(request: str, agent: str, session: str, auto: bool,
+                terminal: bool = False) -> int:
     extend_path()
     current = default_agent()
     if agent and agent != current:
@@ -558,11 +603,13 @@ def route_agent(request: str, agent: str, session: str, auto: bool) -> int:
         emit("done", ok=True, code=0, stopped=False)
         return 0
 
+    if terminal:
+        return open_terminal(request, slug, session, auto)
     return run_agent(request, slug, session, auto)
 
 
 def route_request(raw_request: str, *, agent: str = "", session: str = "",
-                  auto: bool = False) -> int:
+                  auto: bool = False, terminal: bool = False) -> int:
     if len(raw_request) > MAX_REQUEST_CHARS:
         emit("error", text=f"Requests are limited to {MAX_REQUEST_CHARS} characters")
         emit("done", ok=False, code=1, stopped=False)
@@ -573,7 +620,7 @@ def route_request(raw_request: str, *, agent: str = "", session: str = "",
         emit("error", text="Request is empty")
         emit("done", ok=False, code=1, stopped=False)
         return 1
-    return route_agent(request, agent, session, auto)
+    return route_agent(request, agent, session, auto, terminal)
 
 
 def main() -> int:
@@ -581,6 +628,7 @@ def main() -> int:
     agent = ""
     session = ""
     auto = False
+    terminal = False
     while arguments and arguments[0].startswith("--"):
         option = arguments.pop(0)
         if option == "--":
@@ -591,14 +639,17 @@ def main() -> int:
             session = arguments.pop(0)
         elif option == "--auto":
             auto = True
+        elif option == "--terminal":
+            terminal = True
         else:
             print(f"Unknown option: {option}", file=sys.stderr)
             return 2
     if len(arguments) != 1 or not arguments[0].strip():
-        print("Usage: omagent-route [--auto] [--agent SLUG --session ID] <request>",
+        print("Usage: omagent-route [--auto] [--terminal] [--agent SLUG --session ID] <request>",
               file=sys.stderr)
         return 2
-    return route_request(arguments[0], agent=agent, session=session, auto=auto)
+    return route_request(arguments[0], agent=agent, session=session, auto=auto,
+                         terminal=terminal)
 
 
 if __name__ == "__main__":

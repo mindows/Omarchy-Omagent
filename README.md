@@ -95,6 +95,7 @@ The next Enter continues the same session.
 |---|---|
 | `SUPER+A` | Open the pill |
 | `Enter` | Send the request |
+| `Shift+Enter` | Send the request to the other place (see [Configuration](#configuration)) |
 | `Shift+Tab` | Set auto-approve to ON or OFF for this session |
 | `Ctrl+E` | Open this session in the terminal of the agent |
 | `Ctrl+C` | Stop the agent |
@@ -103,13 +104,45 @@ The next Enter continues the same session.
 | `Escape` | Hide the overlay. The agent continues. |
 | `PageUp` / `PageDown` | Scroll the card |
 
-`SUPER+A` opens the last session again until you press `Ctrl+N`.
+`SUPER+A` opens the last session again until you press `Ctrl+N`
+or a request opens in the terminal.
 If you press Escape while the agent operates, the agent continues.
 A notification shows when the agent stops.
 
 If the directory `~/Work` exists, the agent starts there.
 If this directory does not exist, the agent starts in `$HOME`.
 A request must not have more than 2000 characters.
+
+## Configuration
+
+Omagent reads `~/.config/omagent/config.json`.
+The file is optional.
+Omagent reads the file again when you change it.
+
+```json
+{
+  "submitTarget": "terminal"
+}
+```
+
+`submitTarget` sets where `Enter` sends a request:
+
+- `"pill"` shows the answer in the card. This is the default.
+- `"terminal"` opens the agent in its own terminal window with your request.
+
+`Shift+Enter` sends the request to the other place.
+
+When the card has a conversation, `Enter` always continues it in the card.
+Then `Shift+Enter` continues it in the terminal.
+
+In the terminal, the agent can ask for permission.
+The pill mode applies: Ask, or AUTO after `Shift+Tab`.
+The request goes to the agent as you wrote it.
+Omagent does not ask the agent for a short answer there.
+If the card has a session, the terminal continues that session.
+If the agent still operates in the card, Omagent stops it first.
+When the terminal opens, Omagent clears the card.
+The next `SUPER+A` opens an empty pill.
 
 ## Permissions
 
